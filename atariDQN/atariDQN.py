@@ -183,6 +183,5 @@ if __name__ == "__main__":
         agent.update_epsilon()
 
         # print info and draw the figure.
-        if done:
-            writer.add_scalar("score", score, e)
-            writer.flush()
+        writer.add_scalar("score", score, e)
+        writer.flush()
