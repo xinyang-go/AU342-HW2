@@ -40,7 +40,8 @@ class DQNAgent:
 
         # create replay memory using deque
         self.maxlen = 10000
-        self.memory = deque(maxlen=self.maxlen)
+        self.memory = []
+        self.head = 0
 
         # create main model
         self.model_target = self.build_model()
@@ -72,7 +73,10 @@ class DQNAgent:
 
     # save sample <s,a,r,s'> to the replay memory
     def append_sample(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
+        if len(self.memory) < self.maxlen:
+            self.memory.append(None)
+        self.memory[self.head] = (state, [action], [reward], next_state, [not done])
+        self.head = (self.head + 1) % self.maxlen
         # epsilon decay.
 
     def update_epsilon(self):
@@ -86,30 +90,20 @@ class DQNAgent:
         batch_size = min(self.batch_size, len(self.memory))
         mini_batch = random.sample(self.memory, batch_size)
 
-        update_input = np.zeros((batch_size, self.state_size))
-        update_target = np.zeros((batch_size, self.state_size))
-        action, reward, done = [], [], []
+        state = np.concatenate([mini_batch[b][0] for b in range(batch_size)])
+        action = np.concatenate([mini_batch[b][1] for b in range(batch_size)])
+        reward = np.concatenate([mini_batch[b][2] for b in range(batch_size)])
+        next_state = np.concatenate([mini_batch[b][3] for b in range(batch_size)])
+        not_done = np.concatenate([mini_batch[b][4] for b in range(batch_size)])
 
-        for i in range(self.batch_size):
-            update_input[i] = mini_batch[i][0]
-            action.append(mini_batch[i][1])
-            reward.append(mini_batch[i][2])
-            update_target[i] = mini_batch[i][3]
-            done.append(mini_batch[i][4])
+        target = self.model_eval.predict(state)
+        target_val = self.model_target.predict(next_state)
 
-        target = self.model_eval.predict(update_input)
-        target_val = self.model_target.predict(update_target)
-
-        for i in range(self.batch_size):
-            # Q Learning: get maximum Q value at s' from model
-            if done[i]:
-                target[i][action[i]] = reward[i]
-            else:
-                target[i][action[i]] = reward[i] + self.discount_factor * (np.amax(target_val[i]))
+        target[range(batch_size), action] = reward + not_done * self.discount_factor * np.amax(target_val, axis=1)
 
         # and do the model fit!
-        self.model_eval.fit(update_input, target, batch_size=self.batch_size,
-                            epochs=5, verbose=0)
+        history = self.model_eval.fit(state, target, batch_size=self.batch_size, epochs=1, verbose=0)
+        return history.history["loss"][0]
 
     def eval2target(self):
         self.model_target.set_weights(self.model_eval.get_weights())
@@ -126,7 +120,7 @@ if __name__ == "__main__":
     # load the gym env
     env = create_env('MsPacman-ram-v0')
     # set  random seeds to get reproduceable result(recommended)
-    # set_random_seed(0)
+    set_random_seed(0)
     # get size of state and action from environment
     state_size = env.observation_space.shape[0] * env.observation_space.shape[1]
     action_size = env.action_space.n
@@ -144,13 +138,13 @@ if __name__ == "__main__":
     writer = SummaryWriter()
 
     # train DQN
+    steps = 0
     for e in tqdm.trange(EPISODES):
         done = False
         score = 0
         state = env.reset()
         state = np.array(state).reshape([1, state_size])
         lives = 3
-        steps = 0
         while not done:
             dead = False
             while not dead:
@@ -174,7 +168,9 @@ if __name__ == "__main__":
                 agent.append_sample(state, action, reward, next_state, done or dead)
                 # train the evaluation network
                 if steps % 5 == 0:
-                    agent.train_model()
+                    loss = agent.train_model()
+                    if loss is not None:
+                        writer.add_scalar("loss", loss, steps)
                 # go to the next state
                 state = next_state
 
